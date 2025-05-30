@@ -1,0 +1,56 @@
+# Nakama specific
+nakama/data/
+nakama/modules/
+nakama/backup/
+
+# Unity Server Build
+LinuxServer/
+LinuxServer/ServerBuild_Data/
+LinuxServer/ServerBuild_BurstDebugInformation_DoNotShip/
+LinuxServer/*.so
+LinuxServer/*.debug
+LinuxServer/*.x86_64
+
+
+# Logs
+logs/
+*.log
+
+# Environment files
+.env
+.env.*
+
+# IDE specific files
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Build outputs
+bin/
+obj/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Docker volumes
+postgres_data/
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+
+# System Files
+Thumbs.db
+desktop.ini
+
+# Debug files
+*.pdb
+*.mdb
+
+# Coverage reports
+coverage/
+*.coverage 
