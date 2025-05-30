@@ -15,6 +15,22 @@ local function start_dedicated_server()
     end
 end
 
+local function run_command_rpc(context, payload)
+    local url = "http://localhost:5000/run-command"
+    local method = "post"
+    local headers = {
+        ["Content-Type"] = "application/json"
+    }
+    local body = nk.json_encode({ command = "ls -l" })
+
+    local res = nk.http_request(url, method, headers, body)
+
+    return nk.json_encode({ output = res.body })
+end
+
+nk.register_rpc(run_command_rpc, "run_linux_command")
+
+
 -- RPC fonksiyonu
 local function start_server_rpc(context, payload)
     nk.logger_info("RPC: start_server çağrıldı")
