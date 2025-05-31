@@ -1,62 +1,67 @@
 local nk = require("nakama")
 nk.logger_info("=== matchmaking module loaded ===")
 
--- Unity dedicated server'ı başlatma fonksiyonu
-local function start_dedicated_server()
-    local command = "docker run -d --name game-server -p 7777:7777 game-server:latest"
-    local success = os.execute(command)
-    
-    if success then
-        nk.logger_info("Unity dedicated server başlatıldı")
-        return true
-    else
-        nk.logger_error("Unity dedicated server başlatılamadı")
-        return false
-    end
-end
+local M = {}
 
-local function run_command_rpc(context, payload)
-    local url = "http://localhost:5000/run-command"
-    local method = "post"
+local FLASK_BASE_URL = "http://flask-runner:5000"
+
+function M.run_docker_command(command)
+    local url = string.format("%s/run-command", FLASK_BASE_URL)
+    local method = "POST"
     local headers = {
         ["Content-Type"] = "application/json"
     }
-    local body = nk.json_encode({ command = "ls -l" })
+    local body = {
+        command = command
+    }
 
-    local res = nk.http_request(url, method, headers, body)
+    local success, code, _, response = pcall(nk.http_request, url, method, headers, nk.json_encode(body))
 
-    return nk.json_encode({ output = res.body })
+    if not success then
+        nk.logger_error(string.format("Failed request: %q", code))
+        error(code)
+    elseif code >= 400 then
+        nk.logger_error(string.format("Failed request: %q %q", code, response))
+        error(response)
+    else
+        return nk.json_decode(response)
+    end
 end
 
-nk.register_rpc(run_command_rpc, "run_linux_command")
+-- Unity dedicated server'ı başlatma fonksiyonu
+local function start_dedicated_server()
+    -- Bu fonksiyon şu an boş, gerekirse daha sonra implement edilebilir
+end
 
-
--- RPC fonksiyonu
-local function start_server_rpc(context, payload)
-    nk.logger_info("RPC: start_server çağrıldı")
+-- RPC handler
+local function run_linux_command(_, payload)
+    local command = "docker run -d -p 7779:7777/tcp -p 7779:7777/udp --name mirror-server-container mirror-server"
     
-    local success = start_dedicated_server()
-    if success then
-        return nk.json_encode({
-            success = true,
-            message = "Server başlatıldı",
-            port = 7777
-        })
-    else
+    local success, result = pcall(M.run_docker_command, command)
+
+    if not success then
+        nk.logger_error("Failed to execute docker command: " .. tostring(result))
         return nk.json_encode({
             success = false,
-            message = "Server başlatılamadı"
+            error = tostring(result)
+        })
+    else
+        nk.logger_info("Docker command executed successfully: " .. nk.json_encode(result))
+        return nk.json_encode({
+            success = true,
+            output = result.stdout,
+            error = result.stderr,
+            returncode = result.returncode
         })
     end
 end
 
 -- RPC'yi kaydet
-nk.register_rpc(start_server_rpc, "start_server")
+nk.register_rpc(run_linux_command, "run_linux_command")
 
--- Buraya kendi fonksiyonlarınızı ekleyebilirsiniz
 -- Matchmaking eşleşmesi tamamlandığında çağrılacak fonksiyon
 local function matchmaker_matched(context, matched_users)
-    nk.logger_info("Eşleşen oyuncular: " .. nk.json_encode(matched_users)) -- JSON formatında logla
+    nk.logger_info("Eşleşen oyuncular: " .. nk.json_encode(matched_users))
 
     if #matched_users == 2 then
         nk.logger_info("Matchmaking eşleşmesi bulundu! 2 oyuncu eşleşti.")
@@ -78,7 +83,7 @@ local function matchmaker_matched(context, matched_users)
                 user_id = user.presence.user_id,
                 subject = "Eşleşme bulundu!",
                 content = { Address = "127.0.0.1", Port = 7777, MatchId = match_id, Region = "tr" },
-                code = 1001, -- Eşleşme bildirimi
+                code = 1001,
                 sender_id = nil
             })
         end
@@ -93,8 +98,8 @@ local function matchmaker_matched(context, matched_users)
             table.insert(user_data_notifications, {
                 user_id = user.presence.user_id,
                 subject = "Kullanıcı Verisi",
-                content = { user_data = user.presence }, -- Kullanıcının bağlantı bilgileri veya diğer veriler
-                code = 1002, -- Kullanıcı verisi bildirimi
+                content = { user_data = user.presence },
+                code = 1002,
                 sender_id = nil
             })
         end
@@ -105,5 +110,6 @@ local function matchmaker_matched(context, matched_users)
     end
 end
 
-
 nk.register_matchmaker_matched(matchmaker_matched)
+
+return M

@@ -53,9 +53,20 @@ services:
     networks:
       - game_network
 
+  flask-runner:
+    build: ./flask-runner
+    container_name: flask-runner
+    ports:
+      - "5000:5000"
+    networks:
+      - game_network
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+
+
 networks:
   game_network:
     driver: bridge
 
 volumes:
-  postgres_data: 
+  postgres_data:
