@@ -12,8 +12,8 @@ def run_command():
     try:
         result = subprocess.run(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         response = {
-            'stdout': result.stdout,
-            'stderr': result.stderr,
+            'stdout': result.stdout.strip(),
+            'stderr': result.stderr.strip(),
             'returncode': result.returncode
         }
         return jsonify(response)

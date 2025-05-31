@@ -4,6 +4,24 @@ nk.logger_info("=== matchmaking module loaded ===")
 local M = {}
 
 local FLASK_BASE_URL = "http://flask-runner:5000"
+local BASE_PORT = 7779  -- Başlangıç portu
+local MAX_PORT = 7879   -- Maksimum port (100 port aralığı)
+local active_ports = {} -- Aktif portları takip etmek için
+
+-- Port yönetimi için yardımcı fonksiyonlar
+function M.get_next_available_port()
+    for port = BASE_PORT, MAX_PORT do
+        if not active_ports[port] then
+            active_ports[port] = true
+            return port
+        end
+    end
+    return nil -- Port bulunamadı
+end
+
+function M.release_port(port)
+    active_ports[port] = nil
+end
 
 function M.run_docker_command(command)
     local url = string.format("%s/run-command", FLASK_BASE_URL)
@@ -29,35 +47,45 @@ function M.run_docker_command(command)
 end
 
 -- Unity dedicated server'ı başlatma fonksiyonu
-local function start_dedicated_server()
-    -- Bu fonksiyon şu an boş, gerekirse daha sonra implement edilebilir
-end
+local function start_dedicated_server(match_id)
+    local port = M.get_next_available_port()
+    if not port then
+        nk.logger_error("No available ports for new match: " .. match_id)
+        return nil
+    end
 
--- RPC handler
-local function run_linux_command(_, payload)
-    local command = "docker run -d -p 7779:7777/tcp -p 7779:7777/udp --name mirror-server-container mirror-server"
+    local container_name = "mirror-server-" .. match_id
+    local command = string.format(
+        "docker run -d -p %d:7777/tcp -p %d:7777/udp --name %s mirror-server",
+        port, port, container_name
+    )
     
     local success, result = pcall(M.run_docker_command, command)
-
+    
     if not success then
-        nk.logger_error("Failed to execute docker command: " .. tostring(result))
-        return nk.json_encode({
-            success = false,
-            error = tostring(result)
-        })
-    else
-        nk.logger_info("Docker command executed successfully: " .. nk.json_encode(result))
-        return nk.json_encode({
-            success = true,
-            output = result.stdout,
-            error = result.stderr,
-            returncode = result.returncode
-        })
+        M.release_port(port)
+        nk.logger_error("Failed to start server for match " .. match_id .. ": " .. tostring(result))
+        return nil
     end
-end
 
--- RPC'yi kaydet
-nk.register_rpc(run_linux_command, "run_linux_command")
+    -- Response'u kontrol et ve logla
+    nk.logger_info("Docker command response: " .. nk.json_encode(result))
+
+    -- Container ID'yi al
+    local container_id = result.stdout
+    if not container_id then
+        M.release_port(port)
+        nk.logger_error("No container ID received for match " .. match_id)
+        return nil
+    end
+
+    nk.logger_info(string.format("Server started for match %s on port %d", match_id, port))
+    return {
+        port = port,
+        container_id = container_id,
+        container_name = container_name
+    }
+end
 
 -- Matchmaking eşleşmesi tamamlandığında çağrılacak fonksiyon
 local function matchmaker_matched(context, matched_users)
@@ -72,8 +100,10 @@ local function matchmaker_matched(context, matched_users)
         local match_id = nk.match_create(module, match_params)
 
         -- Unity dedicated server'ı başlat
-        if start_dedicated_server() then
-            nk.logger_info("Server başlatıldı, oyuncular bağlanabilir")
+        local server_info = start_dedicated_server(match_id)
+        if not server_info then
+            nk.logger_error("Failed to start server for match: " .. match_id)
+            return
         end
 
         -- Eşleşme bildirimini oluştur (code 1001)
@@ -82,7 +112,13 @@ local function matchmaker_matched(context, matched_users)
             table.insert(match_notifications, {
                 user_id = user.presence.user_id,
                 subject = "Eşleşme bulundu!",
-                content = { Address = "127.0.0.1", Port = 7777, MatchId = match_id, Region = "tr" },
+                content = { 
+                    Address = "127.0.0.1", 
+                    Port = server_info.port, 
+                    MatchId = match_id, 
+                    Region = "tr",
+                    ContainerId = server_info.container_id
+                },
                 code = 1001,
                 sender_id = nil
             })
