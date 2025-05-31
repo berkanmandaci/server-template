@@ -46,6 +46,27 @@ function M.run_docker_command(command)
     end
 end
 
+-- Tüm container'ları durdurma fonksiyonu
+function M.stop_all_containers()
+    local url = string.format("%s/stop-all-containers", FLASK_BASE_URL)
+    local method = "POST"
+    local headers = {
+        ["Content-Type"] = "application/json"
+    }
+
+    local success, code, _, response = pcall(nk.http_request, url, method, headers, "{}")
+
+    if not success then
+        nk.logger_error(string.format("Failed to stop containers: %q", code))
+        error(code)
+    elseif code >= 400 then
+        nk.logger_error(string.format("Failed to stop containers: %q %q", code, response))
+        error(response)
+    else
+        return nk.json_decode(response)
+    end
+end
+
 -- Unity dedicated server'ı başlatma fonksiyonu
 local function start_dedicated_server(match_id)
     local port = M.get_next_available_port()
@@ -86,6 +107,59 @@ local function start_dedicated_server(match_id)
         container_name = container_name
     }
 end
+
+-- Tüm container'ları durdurma RPC'si
+local function stop_all_containers_rpc(_, _)
+    local success, result = pcall(M.stop_all_containers)
+
+    if not success then
+        nk.logger_error("Failed to stop containers: " .. tostring(result))
+        return nk.json_encode({
+            success = false,
+            error = tostring(result)
+        })
+    end
+
+    -- Tüm portları serbest bırak
+    for port = BASE_PORT, MAX_PORT do
+        M.release_port(port)
+    end
+
+    -- Container isimlerinden match ID'leri çıkar ve maçları sonlandır
+    local closed_matches = {}
+    if result.stopped and #result.stopped > 0 then
+        for _, container_id in ipairs(result.stopped) do
+            -- Container ID'den match ID'yi çıkar
+            local container_info = nk.run_docker_command("docker inspect --format '{{.Name}}' " .. container_id)
+            if container_info and container_info.stdout then
+                local container_name = container_info.stdout:gsub("\n", "")
+                local match_id = container_name:match("mirror%-server%-(.+)")
+                
+                if match_id then
+                    -- Maçı sonlandır
+                    local success = pcall(nk.match_close, match_id)
+                    if success then
+                        table.insert(closed_matches, match_id)
+                        nk.logger_info("Match closed: " .. match_id)
+                    else
+                        nk.logger_error("Failed to close match: " .. match_id)
+                    end
+                end
+            end
+        end
+    end
+
+    nk.logger_info("All containers stopped: " .. nk.json_encode(result))
+    return nk.json_encode({
+        success = true,
+        message = result.message,
+        stopped = result.stopped,
+        closed_matches = closed_matches
+    })
+end
+
+-- RPC'yi kaydet
+nk.register_rpc(stop_all_containers_rpc, "stop_all_containers")
 
 -- Matchmaking eşleşmesi tamamlandığında çağrılacak fonksiyon
 local function matchmaker_matched(context, matched_users)
