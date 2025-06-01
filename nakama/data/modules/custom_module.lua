@@ -187,7 +187,7 @@ local function matchmaker_matched(context, matched_users)
                 user_id = user.presence.user_id,
                 subject = "Eşleşme bulundu!",
                 content = { 
-                    Address = "127.0.0.1", 
+                    Address = "89.168.26.74", 
                     Port = server_info.port, 
                     MatchId = match_id, 
                     Region = "tr",
