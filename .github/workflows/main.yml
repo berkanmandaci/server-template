@@ -50,4 +50,6 @@ jobs:
           script: |
             cd /home/ubuntu/server-template
             git pull origin master
+            # Remove old, stopped containers to prevent name conflicts
+            docker compose rm -f -s flask-runner || true
             docker compose up -d --build 
