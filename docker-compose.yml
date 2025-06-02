@@ -56,17 +56,47 @@ services:
   flask-runner:
     build: ./flask-runner
     container_name: flask-runner
-    ports:
-      - "5000:5000"
     networks:
       - game_network
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.flask-runner.rule=Host(`senin-domain-adin.com`) || Host(`89.168.26.74`)"
+      - "traefik.http.routers.flask-runner.entrypoint=web"
+      - "traefik.http.services.flask-runner.loadbalancer.server.port=5000"
+      - "traefik.http.routers.flask-runner.service=flask-runner"
 
+  traefik:
+    image: traefik:v2.11
+    container_name: traefik
+    command:
+      - --api.insecure=true
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - game_network
+      - traefik-public
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.traefik.rule=Host(`traefik.senin-domain-adin.com`)"
+      - "traefik.http.routers.traefik.entrypoint=web"
+      - "traefik.http.services.traefik.loadbalancer.server.port=8080"
 
 networks:
   game_network:
     driver: bridge
+
+  traefik-public:
+    external: true
 
 volumes:
   postgres_data:
