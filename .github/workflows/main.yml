@@ -10,8 +10,7 @@ on:
         required: true
         default: 'flask-runner'
 
-env:
-  # ... (env kısmı burada kalacak)
+env: {}
 
 jobs:
   test:
@@ -52,7 +51,7 @@ jobs:
   build-and-push:
     needs: test
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/master'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master' # Sadece push master olduğunda build ve push yap
     steps:
       - uses: actions/checkout@v3
 
@@ -86,6 +85,7 @@ jobs:
   deploy:
     needs: build-and-push
     runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master' # Sadece push master olduğunda deploy yap
     steps:
       - uses: actions/checkout@v3
 
@@ -101,15 +101,9 @@ jobs:
             docker compose up -d --build
 
   fast-deploy:
-    needs: test
+    needs: test # fast-deploy de testlere bağımlı olacak
     runs-on: ubuntu-latest
-    on:
-      workflow_dispatch: # Manuel tetiklemeyi etkinleştirir
-        inputs:
-          service:
-            description: 'Deploy edilecek servis (örnek: flask-runner)'
-            required: true
-            default: 'flask-runner'
+    if: github.event_name == 'workflow_dispatch' # Sadece manuel tetiklendiğinde çalış
     steps:
       - uses: actions/checkout@v3
 
