@@ -66,6 +66,8 @@ services:
       - "traefik.http.routers.flask-runner.entrypoints=web"
       - "traefik.http.services.flask-runner.loadbalancer.server.port=5000"
       - "traefik.http.routers.flask-runner.service=flask-runner"
+      - "traefik.http.services.flask-runner.healthcheck.path=/health"
+      - "traefik.http.services.flask-runner.healthcheck.interval=10s"
 
   traefik:
     image: traefik:v2.11

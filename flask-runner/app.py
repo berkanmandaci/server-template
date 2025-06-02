@@ -55,7 +55,7 @@ def stop_all_containers():
 def health_check():
     return jsonify({
         'status': 'healthy',
-        'version': '1.0.1',
+        'version': '1.0.2',
         'message': 'Another CI/CD test successful!'
     })
 
