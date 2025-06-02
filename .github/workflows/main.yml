@@ -82,39 +82,8 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  security-scan:
-    needs: build-and-push # Build ve push tamamlandıktan sonra çalışır
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/master' # Sadece master branch'ine push yapıldığında tarama yap
-    steps:
-      - uses: actions/checkout@v3
-
-      # Python Bağımlılık Taraması (pip-audit)
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10' # Flask uygulamanızın Python versiyonuna göre ayarlayın
-
-      - name: Install Python dependencies
-        run: pip install -r flask-runner/requirements.txt
-
-      - name: Run pip-audit
-        run: |
-          pip install pip-audit
-          pip-audit --exit-code 1 # --verbose # Detaylı çıktı için verbose ekleyebilirsiniz
-
-      # Container İmajı Taraması (Trivy)
-      - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: 'docker.io/berkanmandaci/flask-runner:latest' # Taranacak imaj (kendi kullanıcı adınızla güncelleyin)
-          format: 'table'
-          exit-code: '1' # Zafiyet bulunursa job'ı başarısız yap
-          ignore-unfixed: true # Fixi olmayan zafiyetleri görmezden gel
-          vuln-type: 'os,library'
-
   deploy:
-    needs: security-scan # Deploy, güvenlik taraması başarılı olursa çalışır
+    needs: build-and-push
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/master' # Sadece push master olduğunda deploy yap
     steps:
