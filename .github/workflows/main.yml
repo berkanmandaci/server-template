@@ -99,9 +99,9 @@ jobs:
         run: pip install -r flask-runner/requirements.txt
 
       - name: Run pip-audit
-        run: | # pip-audit 1 veya daha fazla zafiyet bulursa hata verir
+        run: |
           pip install pip-audit==2.7.0
-          pip-audit --fail-on-any # --verbose # Detaylı çıktı için verbose ekleyebilirsiniz
+          pip-audit --exit-code 1 # --verbose # Detaylı çıktı için verbose ekleyebilirsiniz
 
       # Container İmajı Taraması (Trivy)
       - name: Run Trivy vulnerability scanner
