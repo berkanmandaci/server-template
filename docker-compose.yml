@@ -58,8 +58,6 @@ services:
     container_name: flask-runner
     networks:
       - game_network
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.flask-runner.rule=Host(`senin-domain-adin.com`) || Host(`89.168.26.74`)"
