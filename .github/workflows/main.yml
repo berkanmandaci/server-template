@@ -3,9 +3,19 @@ name: Nakama Server CI/CD
 on:
   push:
     branches: [ master, dev ]
+  workflow_dispatch: # Manuel tetiklemeyi etkinleştirir
+    inputs:
+      service:
+        description: 'Deploy edilecek servis (örnek: flask-runner)'
+        required: true
+        default: 'flask-runner'
+
+env:
+  # ... (env kısmı burada kalacak)
 
 jobs:
   test:
+    # test job'ı push/pull_request veya fast-deploy tarafından çağrılabilir hale gelecek
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
