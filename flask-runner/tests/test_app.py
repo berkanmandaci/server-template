@@ -10,4 +10,4 @@ def client():
 def test_health_check(client):
     response = client.get('/health')
     assert response.status_code == 200
-    assert response.json == {'status': 'healthy', 'version': '1.0.3', 'message': 'Another CI/CD test successful!'} 
+    assert response.json == {'status': 'healthy', 'version': '1.0.4', 'message': 'Another CI/CD test successful!'} 
