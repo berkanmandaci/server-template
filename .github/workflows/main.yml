@@ -27,8 +27,13 @@ jobs:
         run: docker network create traefik-public || true
 
       - name: Build Docker images
-        run: |
-          docker compose build
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          push: false
+          outputs: type=docker,name=berkanmandaci/nakama-server:test-${{ github.sha }},push=false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Run tests
         run: |
@@ -56,6 +61,8 @@ jobs:
           context: .
           push: true
           tags: berkanmandaci/nakama-server:${{ github.sha }},berkanmandaci/nakama-server:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Build and push Flask image
         uses: docker/build-push-action@v4
@@ -63,6 +70,8 @@ jobs:
           context: ./flask-runner
           push: true
           tags: berkanmandaci/flask-runner:${{ github.sha }},berkanmandaci/flask-runner:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
   deploy:
     needs: build-and-push
@@ -80,4 +89,29 @@ jobs:
             cd /home/ubuntu/server-template
             git pull origin master
             docker compose up -d --build
-            # Sıfır kesinti deploy scripti buraya gelecek 
+
+  fast-deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    on:
+      workflow_dispatch: # Manuel tetiklemeyi etkinleştirir
+        inputs:
+          service:
+            description: 'Deploy edilecek servis (örnek: flask-runner)'
+            required: true
+            default: 'flask-runner'
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Deploy specific service to Oracle Cloud
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.ORACLE_HOST }}
+          username: ${{ secrets.ORACLE_USERNAME }}
+          key: ${{ secrets.ORACLE_SSH_KEY }}
+          script: |
+            cd /home/ubuntu/server-template
+            git pull origin master
+            docker compose stop ${{ github.event.inputs.service }} || true
+            docker compose rm -f ${{ github.event.inputs.service }} || true
+            docker compose up -d --build ${{ github.event.inputs.service }} 
