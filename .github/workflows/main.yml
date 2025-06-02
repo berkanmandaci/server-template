@@ -15,29 +15,58 @@ jobs:
 
       - name: Install Docker Compose
         run: |
-          if ! command -v docker-compose &> /dev/null
+          if ! command -v docker compose &> /dev/null
           then
-              echo "docker-compose not found, installing..."
-              sudo apt-get update && sudo apt-get install -y docker-compose
+              echo "docker compose not found, installing..."
+              sudo apt-get update && sudo apt-get install -y docker-compose-plugin
           else
-              echo "docker-compose is already installed."
+              echo "docker compose is already installed."
           fi
 
       - name: Create Traefik Public Network
-        run: docker network create traefik-public
+        run: docker network create traefik-public || true
 
       - name: Build Docker images
         run: |
-          docker-compose build
+          docker compose build
 
       - name: Run tests
         run: |
-          docker-compose run --rm flask-runner python -m pytest
+          docker compose run --rm flask-runner python -m pytest
 
-  deploy:
+  build-and-push:
     needs: test
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/master'
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Login to DockerHub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build and push Nakama image
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          push: true
+          tags: berkanmandaci/nakama-server:${{ github.sha }},berkanmandaci/nakama-server:latest
+
+      - name: Build and push Flask image
+        uses: docker/build-push-action@v4
+        with:
+          context: ./flask-runner
+          push: true
+          tags: berkanmandaci/flask-runner:${{ github.sha }},berkanmandaci/flask-runner:latest
+
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
 
@@ -49,7 +78,5 @@ jobs:
           key: ${{ secrets.ORACLE_SSH_KEY }}
           script: |
             cd /home/ubuntu/server-template
-            git pull origin master
-            # Remove old, stopped containers to prevent name conflicts
-            docker compose rm -f -s flask-runner || true
-            docker compose up -d --build 
+            git pull origin master # Kodu senkronize tutmak için
+            # Sıfır kesinti deploy scripti buraya gelecek 
