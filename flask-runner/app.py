@@ -55,8 +55,8 @@ def stop_all_containers():
 def health_check():
     return jsonify({
         'status': 'healthy',
-        'version': '1.0.0',
-        'message': 'CI/CD test successful!'
+        'version': '1.0.1',
+        'message': 'Another CI/CD test successful!'
     })
 
 if __name__ == '__main__':
