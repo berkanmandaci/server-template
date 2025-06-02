@@ -17,5 +17,6 @@ RUN apt-get update && \
 WORKDIR /app
 COPY app.py .
 COPY requirements.txt .
+COPY tests /app/tests
 RUN pip install -r requirements.txt
 CMD ["python", "app.py"]
