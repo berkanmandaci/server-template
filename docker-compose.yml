@@ -63,7 +63,7 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.flask-runner.rule=Host(`senin-domain-adin.com`) || Host(`89.168.26.74`)"
-      - "traefik.http.routers.flask-runner.entrypoint=web"
+      - "traefik.http.routers.flask-runner.entrypoints=web"
       - "traefik.http.services.flask-runner.loadbalancer.server.port=5000"
       - "traefik.http.routers.flask-runner.service=flask-runner"
 
@@ -88,7 +88,7 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.traefik.rule=Host(`traefik.senin-domain-adin.com`)"
-      - "traefik.http.routers.traefik.entrypoint=web"
+      - "traefik.http.routers.traefik.entrypoints=web"
       - "traefik.http.services.traefik.loadbalancer.server.port=8080"
 
 networks:
