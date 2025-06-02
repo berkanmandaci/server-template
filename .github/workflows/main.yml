@@ -23,6 +23,9 @@ jobs:
               echo "docker-compose is already installed."
           fi
 
+      - name: Create Traefik Public Network
+        run: docker network create traefik-public
+
       - name: Build Docker images
         run: |
           docker-compose build
