@@ -16,5 +16,6 @@ RUN apt-get update && \
 
 WORKDIR /app
 COPY app.py .
-RUN pip install flask
+COPY requirements.txt .
+RUN pip install -r requirements.txt
 CMD ["python", "app.py"]
