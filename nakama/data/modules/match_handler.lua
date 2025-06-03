@@ -1,57 +1,62 @@
 local nk = require("nakama")
 
--- Match state constants
+-- Match durumları - basit ve net
 local MATCH_STATE = {
-    WAITING = "waiting",
-    STARTING = "starting",
-    IN_PROGRESS = "in_progress",
-    FINISHED = "finished"
+    WAITING = "waiting",     -- Oyuncular katılıyor
+    ACTIVE = "active",       -- Oyun devam ediyor  
+    FINISHED = "finished"    -- Oyun bitti
 }
 
--- Match configuration
-local MATCH_CONFIG = {
-    TICK_RATE = 1,
-    LABEL = "Custom Match",
-    JOIN_TIMEOUT = 30,
-    MAX_PLAYERS = 2
+-- Sabit ayarlar
+local CONFIG = {
+    MAX_PLAYERS = 2,
+    JOIN_TIMEOUT_SECONDS = 30,
+    MATCH_DURATION_SECONDS = 30, -- 10 dakika 600
+    TICK_RATE = 1
 }
 
--- Signal types
-local SIGNAL_TYPES = {
-    MATCH_START = "match_start",
-    MATCH_END = "match_end",
+-- Mesaj tipleri
+local MESSAGE_TYPES = {
     PLAYER_JOINED = "player_joined",
-    PLAYER_LEFT = "player_left"
+    PLAYER_LEFT = "player_left", 
+    MATCH_STARTED = "match_started",
+    MATCH_ENDED = "match_ended",
+    GAME_UPDATE = "game_update"
 }
 
--- Helper functions
-local function log_info(message)
-    nk.logger_info(string.format("[MatchHandler] %s", message))
+-- Utility fonksiyonlar
+local function log(level, message)
+    local log_func = nk.logger_info
+    if level == "ERROR" then log_func = nk.logger_error
+    elseif level == "DEBUG" then log_func = nk.logger_debug end
+    
+    log_func(string.format("[MatchHandler] %s", message))
 end
 
-local function log_error(message)
-    nk.logger_error(string.format("[MatchHandler] ERROR: %s", message))
-end
-
-local function log_debug(message)
-    nk.logger_debug(string.format("[MatchHandler] DEBUG: %s", message))
-end
-
--- FIX: Presences sayısını doğru hesaplayan fonksiyon
-local function count_presences(presences)
+local function count_players(presences)
+    if not presences then return 0 end
+    
     local count = 0
-    for session_id, presence in pairs(presences) do
-        if presence then
-            count = count + 1
-        end
+    for _ in pairs(presences) do
+        count = count + 1
     end
     return count
 end
 
--- FIX: Invited users lookup'ı optimize et
-local function create_invited_users_lookup(invited_users)
+local function broadcast_to_all(dispatcher, message_type, data)
+    local message = {
+        type = message_type,
+        data = data,
+        timestamp = os.time()
+    }
+    
+    dispatcher.broadcast_message(1, nk.json_encode(message), nil, nil, true)
+    log("DEBUG", string.format("Broadcast: %s", message_type))
+end
+
+local function create_invited_lookup(invited_users)
     local lookup = {}
-    for _, user in ipairs(invited_users) do
+    for _, user in ipairs(invited_users or {}) do
         if user.presence and user.presence.user_id then
             lookup[user.presence.user_id] = true
         end
@@ -59,309 +64,220 @@ local function create_invited_users_lookup(invited_users)
     return lookup
 end
 
-local function broadcast_signal(dispatcher, signal_type, data)
-    local signal = {
-        type = signal_type,
-        data = data
-    }
-    local encoded_signal = nk.json_encode(signal)
-    dispatcher.broadcast_message(1, encoded_signal, nil, nil, true)
-    log_debug(string.format("Broadcast signal: %s", encoded_signal))
-end
-
+-- Match lifecycle fonksiyonları
 local function match_init(context, params)
     local state = {
+        status = MATCH_STATE.WAITING,
         presences = {},
-        invited_users = params.invited_users or {},
-        invited_users_lookup = create_invited_users_lookup(params.invited_users or {}), -- FIX: Lookup table
-        state = MATCH_STATE.WAITING,
-        created_at = params.created_at or os.time(),
-        join_timeout = os.time() + MATCH_CONFIG.JOIN_TIMEOUT,
-        debug = params.debug or false,
-        server_info = params.server_info or nil
+        invited_users_lookup = create_invited_lookup(params.invited_users),
+        server_info = nil,
+        created_at = os.time(),
+        join_deadline = os.time() + CONFIG.JOIN_TIMEOUT_SECONDS
     }
-
-    log_info(string.format("Match initialized: %s, invited users: %d", 
-        state.state, #state.invited_users))
     
-    -- FIX: Debug için initial state'i logla
-    if state.debug then
-        log_debug(string.format("Initial presences count: %d", count_presences(state.presences)))
-        log_debug(string.format("Max players: %d", MATCH_CONFIG.MAX_PLAYERS))
-    end
-
-    return state, MATCH_CONFIG.TICK_RATE, MATCH_CONFIG.LABEL
+    log("INFO", string.format("Match initialized - ID: %s, Invited players: %d", 
+        context.match_id, #(params.invited_users or {})))
+    
+    return state, CONFIG.TICK_RATE, "CustomMatch"
 end
 
 local function match_join_attempt(context, dispatcher, tick, state, presence, metadata)
-    if state.debug then
-        log_debug(string.format("Join attempt from user %s, current state: %s", 
-            presence.user_id, state.state))
-        log_debug(string.format("Current presences count: %d", count_presences(state.presences)))
+    -- Temel kontroller
+    if state.status == MATCH_STATE.FINISHED then
+        return state, false, "Match has ended"
     end
-
-    -- FIX: Finished state kontrolü ekle
-    if state.state == MATCH_STATE.FINISHED then
-        log_error(string.format("Match is finished, cannot join: %s", presence.user_id))
-        return state, false, "Match is finished"
-    end
-
-    -- Zaman aşımı kontrolü
-    if state.state == MATCH_STATE.WAITING and os.time() > state.join_timeout then
-        log_error(string.format("Join timeout for user %s", presence.user_id))
-        return state, false, "Match join timeout"
-    end
-
-    -- Maksimum oyuncu kontrolü
-    local current_count = count_presences(state.presences)
-    if current_count >= MATCH_CONFIG.MAX_PLAYERS then
-        log_error(string.format("Match is full for user %s (current: %d, max: %d)", 
-            presence.user_id, current_count, MATCH_CONFIG.MAX_PLAYERS))
+    
+    if count_players(state.presences) >= CONFIG.MAX_PLAYERS then
         return state, false, "Match is full"
     end
-
-    -- FIX: Optimize edilmiş davet kontrolü
+    
+    if state.status == MATCH_STATE.WAITING and os.time() > state.join_deadline then
+        return state, false, "Join period expired"
+    end
+    
+    -- Davet kontrolü
     if not state.invited_users_lookup[presence.user_id] then
-        log_error(string.format("User %s not invited to match", presence.user_id))
         return state, false, "Not invited to this match"
     end
-
-    log_info(string.format("User %s join attempt accepted", presence.user_id))
+    
+    log("INFO", string.format("Player join approved: %s", presence.user_id))
     return state, true
 end
 
 local function match_join(context, dispatcher, tick, state, presences)
+    -- Oyuncuları ekle
     for _, presence in ipairs(presences) do
         state.presences[presence.session_id] = presence
-        log_info(string.format("User %s joined match (session: %s)", 
+        
+        log("INFO", string.format("Player joined: %s (session: %s)", 
             presence.user_id, presence.session_id))
         
-        -- Oyunca katılma sinyali gönder
-        broadcast_signal(dispatcher, SIGNAL_TYPES.PLAYER_JOINED, {
+        -- Katılım mesajı gönder
+        broadcast_to_all(dispatcher, MESSAGE_TYPES.PLAYER_JOINED, {
             user_id = presence.user_id,
-            session_id = presence.session_id,
             match_id = context.match_id,
             server_info = state.server_info
         })
     end
-
-    -- FIX: Doğru sayım ile kontrol
-    local current_count = count_presences(state.presences)
-    log_debug(string.format("Current player count: %d/%d", current_count, MATCH_CONFIG.MAX_PLAYERS))
-
-    if current_count == MATCH_CONFIG.MAX_PLAYERS then
-        state.state = MATCH_STATE.STARTING
-        state.join_timeout = nil
-        log_info(string.format("All players joined (%d/%d), starting match", 
-            current_count, MATCH_CONFIG.MAX_PLAYERS))
+    
+    local player_count = count_players(state.presences)
+    
+    -- Tüm oyuncular katıldıysa oyunu başlat
+    if player_count == CONFIG.MAX_PLAYERS then
+        state.status = MATCH_STATE.ACTIVE
+        state.join_deadline = nil
         
-        -- Maç başlangıç sinyali gönder
-        broadcast_signal(dispatcher, SIGNAL_TYPES.MATCH_START, {
+        log("INFO", string.format("Match started - All players joined (%d/%d)", 
+            player_count, CONFIG.MAX_PLAYERS))
+        
+        broadcast_to_all(dispatcher, MESSAGE_TYPES.MATCH_STARTED, {
             match_id = context.match_id,
-            players = state.presences,
-            server_info = state.server_info,
-            player_count = current_count
+            player_count = player_count,
+            server_info = state.server_info
         })
-        
-        -- FIX: Kısa bir gecikme ile IN_PROGRESS'e geç
-        state.state = MATCH_STATE.IN_PROGRESS
-        log_info("Match transitioned to IN_PROGRESS")
-    else
-        log_debug(string.format("Waiting for more players: %d/%d", 
-            current_count, MATCH_CONFIG.MAX_PLAYERS))
     end
-
+    
     return state
 end
 
--- Container cleanup helper function
-local function cleanup_match_container(match_id)
-    -- Custom module'ün HTTP client'ını kullan
-    local custom_module = require("custom_module")
-    if custom_module and custom_module.stop_match_container then
-        local success, err = custom_module.stop_match_container(match_id)
-        if success then
-            log_info(string.format("Container cleaned up for match: %s", match_id))
-        else
-            log_error(string.format("Failed to cleanup container for match %s: %s", match_id, err))
-        end
-    else
-        log_error("Custom module not available for container cleanup")
-    end
-end
-
 local function match_leave(context, dispatcher, tick, state, presences)
+    -- State kontrolü
+    if not state or not state.presences then
+        log("ERROR", "Invalid state in match_leave")
+        return state
+    end
+    
     for _, presence in ipairs(presences) do
-        if state.presences[presence.session_id] then
+        if presence and presence.session_id and state.presences[presence.session_id] then
             state.presences[presence.session_id] = nil
-            log_info(string.format("User %s left match (session: %s)", 
-                presence.user_id, presence.session_id))
             
-            broadcast_signal(dispatcher, SIGNAL_TYPES.PLAYER_LEFT, {
+            log("INFO", string.format("Player left: %s (session: %s)", 
+                presence.user_id or "unknown", presence.session_id))
+            
+            broadcast_to_all(dispatcher, MESSAGE_TYPES.PLAYER_LEFT, {
                 user_id = presence.user_id,
-                session_id = presence.session_id,
                 match_id = context.match_id
             })
         end
     end
-
-    -- FIX: Doğru sayım ile kontrol
-    local current_count = count_presences(state.presences)
-    log_debug(string.format("Players after leave: %d/%d", current_count, MATCH_CONFIG.MAX_PLAYERS))
-
-    if current_count < MATCH_CONFIG.MAX_PLAYERS and state.state == MATCH_STATE.IN_PROGRESS then
-        state.state = MATCH_STATE.FINISHED
-        state.join_timeout = nil
-        log_info("Not enough players, ending match")
-        
-        -- FIX: Container'ı temizle
-        cleanup_match_container(context.match_id)
-        
-        broadcast_signal(dispatcher, SIGNAL_TYPES.MATCH_END, {
-            match_id = context.match_id,
-            reason = "Not enough players",
-            remaining_players = state.presences,
-            player_count = current_count
-        })
-    end
-
+    
     return state
 end
 
+local function cleanup_and_end_match(context, dispatcher, state, reason)
+    log("INFO", string.format("Ending match: %s - Reason: %s", context.match_id, reason))
+    
+    -- Son mesaj gönder
+    broadcast_to_all(dispatcher, MESSAGE_TYPES.MATCH_ENDED, {
+        match_id = context.match_id,
+        reason = reason,
+        player_count = count_players(state.presences)
+    })
+    
+    -- Container temizliği
+    local custom_module = require("custom_module")
+    if custom_module and custom_module.stop_match_container then
+        pcall(custom_module.stop_match_container, context.match_id)
+    end
+    
+    -- Match'i kapat
+    pcall(nk.match_close, context.match_id)
+    
+    return nil -- Match'i sonlandır
+end
+
 local function match_loop(context, dispatcher, tick, state, messages)
-    -- FIX: Sadece WAITING durumunda timeout kontrolü
-    if state.state == MATCH_STATE.WAITING and state.join_timeout then
-        if os.time() > state.join_timeout then
-            state.state = MATCH_STATE.FINISHED
-            state.join_timeout = nil
-            log_info(string.format("Match join timeout for match %s, ending match", context.match_id))
-            
-            -- FIX: Timeout durumunda da container'ı temizle
-            cleanup_match_container(context.match_id)
-            
-            broadcast_signal(dispatcher, SIGNAL_TYPES.MATCH_END, {
-                match_id = context.match_id,
-                reason = "Join timeout",
-                remaining_players = state.presences,
-                player_count = count_presences(state.presences)
-            })
-            return state
+    -- State kontrolü
+    if not state then
+        log("ERROR", "State is nil in match_loop")
+        return nil
+    end
+    
+    log("DEBUG", string.format("Match loop - Status: %s, Tick: %d", 
+        state.status or "unknown", tick))
+    
+    -- JOIN TIMEOUT kontrolü
+    if state.status == MATCH_STATE.WAITING and state.join_deadline then
+        if os.time() > state.join_deadline then
+            return cleanup_and_end_match(context, dispatcher, state, "Join timeout")
         end
     end
-
+    
+    -- MATCH DURATION kontrolü
+    if state.status == MATCH_STATE.ACTIVE then
+        local elapsed = os.time() - state.created_at
+        if elapsed > CONFIG.MATCH_DURATION_SECONDS then
+            return cleanup_and_end_match(context, dispatcher, state, "Time limit reached")
+        end
+    end
+    
     -- Mesaj işleme
     for _, message in ipairs(messages) do
-        if state.debug then
-            log_debug(string.format("Received message from user %s: %s", 
-                message.sender.user_id, message.data))
-        end
-        
-        -- Mesaj işleme mantığı
-        local decoded_data = nk.json_decode(message.data)
-        if decoded_data and decoded_data.type then
-            log_debug(string.format("Processing message type: %s", decoded_data.type))
+        local success, decoded = pcall(nk.json_decode, message.data)
+        if success and decoded and decoded.type then
+            log("DEBUG", string.format("Processing message: %s from %s", 
+                decoded.type, message.sender.user_id))
             
-            if decoded_data.type == "game_update" then
-                broadcast_signal(dispatcher, decoded_data.type, decoded_data)
-            elseif decoded_data.type == "match_ready" then
-                -- Oyuncu hazır durumunu işle
-                log_info(string.format("Player %s is ready", message.sender.user_id))
-            elseif decoded_data.type == "end_match" then
-                -- FIX: Manuel match bitirme
-                state.state = MATCH_STATE.FINISHED
-                log_info(string.format("Match manually ended by player %s", message.sender.user_id))
-                cleanup_match_container(context.match_id)
-                broadcast_signal(dispatcher, SIGNAL_TYPES.MATCH_END, {
-                    match_id = context.match_id,
-                    reason = "Match ended manually",
-                    remaining_players = state.presences,
-                    player_count = count_presences(state.presences)
-                })
+            -- Mesaj tipine göre işlem
+            if decoded.type == "game_update" then
+                -- Oyun güncellemelerini broadcast et
+                broadcast_to_all(dispatcher, MESSAGE_TYPES.GAME_UPDATE, decoded.data)
+                
+            elseif decoded.type == "end_match" then
+                -- Manuel bitirme
+                return cleanup_and_end_match(context, dispatcher, state, "Ended by player")
+                
+            elseif decoded.type == "player_ready" then
+                log("INFO", string.format("Player ready: %s", message.sender.user_id))
+                -- İsteğe bağlı: ready state tracking eklenebilir
             end
+        else
+            log("ERROR", "Invalid message format")
         end
     end
-
-    -- IN_PROGRESS durumunda oyun mantığını yönet
-    if state.state == MATCH_STATE.IN_PROGRESS then
-        local match_duration = os.time() - state.created_at
-        if match_duration > 600 then -- 10 dakika sonra maçı bitir
-            state.state = MATCH_STATE.FINISHED
-            log_info(string.format("Match %s ended due to maximum duration", context.match_id))
-            
-            -- FIX: Duration timeout'ta da container'ı temizle
-            cleanup_match_container(context.match_id)
-            
-            broadcast_signal(dispatcher, SIGNAL_TYPES.MATCH_END, {
-                match_id = context.match_id,
-                reason = "Maximum match duration reached",
-                remaining_players = state.presences
-            })
-        end
-    end
-
-    -- FIX: Periyodik state kontrolü (debug için)
-    if state.debug and tick % 10 == 0 then -- Her 10 tick'te bir
-        local current_count = count_presences(state.presences)
-        log_debug(string.format("Periodic check - State: %s, Players: %d/%d", 
-            state.state, current_count, MATCH_CONFIG.MAX_PLAYERS))
-    end
-
+    
+    -- Nakama'nın beklediği format: sadece state döndür
     return state
 end
 
 local function match_terminate(context, dispatcher, tick, state, grace_seconds)
-    log_info(string.format("Match terminating for match %s, final state: %s", 
-        context.match_id, state.state))
+    log("INFO", string.format("Match terminating: %s", context.match_id))
     
-    -- FIX: Terminate durumunda da container'ı temizle
-    cleanup_match_container(context.match_id)
-    
-    broadcast_signal(dispatcher, SIGNAL_TYPES.MATCH_END, {
+    broadcast_to_all(dispatcher, MESSAGE_TYPES.MATCH_ENDED, {
         match_id = context.match_id,
-        reason = "Match terminated",
-        remaining_players = state.presences,
-        player_count = count_presences(state.presences)
+        reason = "Server shutdown",
+        player_count = count_players(state.presences)
     })
     
-    -- Cleanup
-    state.presences = {}
-    state.invited_users_lookup = {}
-    state.join_timeout = nil
-    state.server_info = nil
-    
-    log_info("Match resources cleaned up")
-    return state
+    return nil
 end
 
 local function match_signal(context, dispatcher, tick, state, data)
-    log_info(string.format("Signal received for match %s: %s", context.match_id, data))
-    
-    local signal_data = nk.json_decode(data)
-    if not signal_data then
-        log_error("Failed to parse signal data")
-        return state, "error: invalid signal data"
+    local success, signal = pcall(nk.json_decode, data)
+    if not success or not signal then
+        log("ERROR", "Invalid signal data")
+        return state, "error: invalid signal"
     end
     
-    if signal_data.type == "server_info" then
-        state.server_info = signal_data.data.server_info
-        log_info(string.format("Server info updated for match: %s", context.match_id))
+    if signal.type == "server_info" then
+        state.server_info = signal.data.server_info
+        log("INFO", string.format("Server info updated for match: %s", context.match_id))
         
-        -- FIX: Server info'yu sadece oyuncular varsa broadcast et
-        local current_count = count_presences(state.presences)
-        if current_count > 0 then
-            broadcast_signal(dispatcher, "server_info_updated", {
+        -- Oyuncular varsa server info'yu broadcast et
+        if count_players(state.presences) > 0 then
+            broadcast_to_all(dispatcher, "server_info_updated", {
                 match_id = context.match_id,
-                server_info = state.server_info,
-                player_count = current_count
+                server_info = state.server_info
             })
         end
         
-        return state, "success: server info updated"
+        return state, "success"
     end
     
-    return state, "success: signal processed"
+    return state, "success"
 end
 
+-- Export
 return {
     match_init = match_init,
     match_join_attempt = match_join_attempt,
@@ -369,5 +285,5 @@ return {
     match_leave = match_leave,
     match_loop = match_loop,
     match_terminate = match_terminate,
-    match_signal = match_signal,
+    match_signal = match_signal
 }
