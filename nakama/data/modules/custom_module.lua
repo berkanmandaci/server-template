@@ -19,6 +19,7 @@ local FLASK_BASE_URL = "http://flask-runner:5000"
 local BASE_PORT = 7779  -- Başlangıç portu
 local MAX_PORT = 7879   -- Maksimum port (100 port aralığı)
 local active_ports = {} -- Aktif portları takip etmek için
+local match_containers = {} -- Match -> Container mapping
 
 -- Port yönetimi için yardımcı fonksiyonlar
 function M.get_next_available_port()
@@ -113,6 +114,46 @@ function M.stop_all_containers()
     return result
 end
 
+-- NEW: Spesifik match container'ını durdur
+function M.stop_match_container(match_id)
+    if not match_id then
+        log_error("Match ID is required for container cleanup")
+        return false, "Match ID required"
+    end
+
+
+    -- NEW: Use the Flask endpoint to stop and remove the container
+    local url = string.format("%s/stop-container", FLASK_BASE_URL)
+    local headers = { ["Content-Type"] = "application/json" }
+    local body = nk.json_encode({ match_id = match_id })
+
+    local result, err = make_http_request(url, "POST", headers, body)
+
+    if err then
+        log_error(string.format("Failed to call Flask /stop-container endpoint for %s: %s", container_name, err))
+        -- Attempt to release port even if Flask call failed
+        M.release_port(port)
+        match_containers[match_id] = nil
+        return false, err
+    end
+
+    -- Check Flask endpoint response
+    if result and result.error then
+        log_error(string.format("Flask /stop-container returned error for %s: %s", container_name, result.error))
+        -- Attempt to release port even if Flask returned error
+        M.release_port(port)
+        match_containers[match_id] = nil
+        return false, result.error
+    end
+
+    -- Port'u serbest bırak ve mapping'i temizle
+    M.release_port(port)
+    match_containers[match_id] = nil
+
+    log_info(string.format("Container %s stopped and cleaned up for match %s", container_name, match_id))
+    return true, nil
+end
+
 -- Dedicated server management
 local function start_dedicated_server(match_id)
     local port = M.get_next_available_port()
@@ -150,12 +191,17 @@ local function start_dedicated_server(match_id)
         return nil
     end
 
-    log_info(string.format("Server started successfully for match %s on port %d", match_id, port))
-    return {
+    -- NEW: Container bilgilerini sakla
+    local server_info = {
         port = port,
         container_id = container_id,
         container_name = container_name
     }
+    
+    match_containers[match_id] = server_info
+
+    log_info(string.format("Server started successfully for match %s on port %d", match_id, port))
+    return server_info
 end
 
 -- RPC handlers
@@ -172,6 +218,9 @@ local function stop_all_containers_rpc(context, payload)
     for port = BASE_PORT, MAX_PORT do
         M.release_port(port)
     end
+
+    -- Clear container mappings
+    match_containers = {}
 
     -- Close matches
     local closed_matches = {}
@@ -203,8 +252,27 @@ local function stop_all_containers_rpc(context, payload)
     })
 end
 
--- RPC'yi kaydet
+-- NEW: Spesifik match container'ını durduran RPC
+local function stop_match_container_rpc(context, payload)
+    local decoded_payload = nk.json_decode(payload)
+    if not decoded_payload or not decoded_payload.match_id then
+        return nk.json_encode({
+            success = false,
+            error = "Match ID is required"
+        })
+    end
+
+    local success, err = M.stop_match_container(decoded_payload.match_id)
+    return nk.json_encode({
+        success = success,
+        error = err,
+        match_id = decoded_payload.match_id
+    })
+end
+
+-- RPC'leri kaydet
 nk.register_rpc(stop_all_containers_rpc, "stop_all_containers")
+nk.register_rpc(stop_match_container_rpc, "stop_match_container")
 
 -- Matchmaking configuration
 local MATCHMAKING_CONFIG = {
@@ -282,7 +350,7 @@ local function matchmaker_matched(context, matched_users)
         if not success then
             log_error("Failed to send server info to match")
             -- Sunucuyu ve maçı temizle
-            pcall(M.stop_all_containers)
+            pcall(M.stop_match_container, match_id)
             pcall(nk.match_close, match_id)
             return
         end
@@ -293,7 +361,6 @@ local function matchmaker_matched(context, matched_users)
 end
 
 nk.register_matchmaker_matched(matchmaker_matched)
-
 
 log_info("=== matchmaking module loaded ===")
 
