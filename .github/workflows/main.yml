@@ -2,7 +2,7 @@ name: Nakama Server CI/CD
 
 on:
   push:
-    branches: [ master, dev ]
+    branches: [ master ]
   workflow_dispatch: # Manuel tetiklemeyi etkinleştirir
     inputs:
       service:
