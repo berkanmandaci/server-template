@@ -193,9 +193,6 @@ local function match_loop(context, dispatcher, tick, state, messages)
         return nil
     end
     
-    log("DEBUG", string.format("Match loop - Status: %s, Tick: %d", 
-        state.status or "unknown", tick))
-    
     -- JOIN TIMEOUT kontrolü
     if state.status == MATCH_STATE.WAITING and state.join_deadline then
         if os.time() > state.join_deadline then
